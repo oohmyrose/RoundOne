@@ -1,0 +1,725 @@
+﻿using OpenQA.Selenium;
+using OpenQA.Selenium.Chrome;
+using OpenQA.Selenium.Support.UI;
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using AutomationExtension;
+
+namespace RoundOne
+{
+    class GMM
+    {
+        public static IWebDriver driver = new ChromeDriver();
+        public static WebDriverWait wait = new WebDriverWait(driver, TimeSpan.FromSeconds(60));
+        public static string sport = String.Empty;
+        public static string competition = String.Empty;
+        public static string home = String.Empty;
+        public static string away = String.Empty;
+        public static string gametype = String.Empty;
+        public static string eventid = String.Empty;
+        public static DateTime eventTime;
+
+        public static void CreateEvent(TheEnvironment envi, Sport sp, EventTime evt)
+        {
+            try
+            {
+                Login(envi);
+                GetEventComponent(sp,evt);
+                string eventid = FixtureEvent(sp, evt);
+                GoToMMPage(eventid);
+                UpdateOdds(eventid);
+                OpenMarket(eventid);
+                //KeepEvent(eventid);
+                //ResultAndSettleEvent(eventid, evt);
+            }
+            catch (Exception e)
+            {
+                Test.Log(Status.Fail, "Error", e.Message);
+                Test.PrintScreen(driver);
+            }
+            finally
+            {
+                Test.End();
+            }
+        }
+
+        
+
+
+        public static void Login(TheEnvironment envi)
+        {
+            Test.CaseName("GMM Login", "Login to GMM");
+            string URL = String.Empty;
+            string username = String.Empty;
+            string password = String.Empty;
+            var gmmLogin = new GMMLogin(driver);
+
+            // Assign URL/user/pwd based on environment 
+            switch (envi)
+            {
+                case TheEnvironment.QAT:
+                    URL = System.Configuration.ConfigurationManager.AppSettings["qatGMMURL"];
+                    username = System.Configuration.ConfigurationManager.AppSettings["qatGMMUser"];
+                    password = System.Configuration.ConfigurationManager.AppSettings["qatGMMPwd"];
+                    break;
+                case TheEnvironment.UAT:
+                    URL = System.Configuration.ConfigurationManager.AppSettings["uatGMMURL"];
+                    username = System.Configuration.ConfigurationManager.AppSettings["uatGMMUser"];
+                    password = System.Configuration.ConfigurationManager.AppSettings["uatGMMPwd"];
+                    break;
+
+            }
+
+            driver.Manage().Window.Maximize();
+            driver.Url = URL + "Login.aspx";
+            gmmLogin.UserName.EnterText("GMM Login User Textbox", username);
+            gmmLogin.Password.EnterText("GMM Login Password Textbox", password);
+            gmmLogin.Submit.ClickOnIt("GMM Login Button");
+
+
+            if (ElementVerify.Exist(driver, gmmLogin.SiteMenuAfterLogin) != null)
+            {
+                WriteConsole.Green("You successfully Login to GMM");
+                Test.Log(Status.Pass, "Login GMM", "You successfully Login to GMM");
+                Test.PrintScreen(driver);
+            }
+            else
+            {
+                WriteConsole.Green("You successfully Login to GMM");
+                WriteConsole.Red(String.Format(ElementVerify.Exist(driver, gmmLogin.LoginErrorMessage).Text));
+                WriteConsole.Green("Suggested Solution: You can go to GMM Server, and restart DNS Client Sevice");
+                Test.Log(Status.Fail, "Login GMM", String.Format(ElementVerify.Exist(driver, gmmLogin.LoginErrorMessage).Text));
+                Test.PrintScreen(driver);
+                throw new Exception("GMM Login Failed");
+            }
+        }
+        public static string FixtureEvent(Sport sp, EventTime evt)
+        {
+            Test.CaseName("GMM Create " + sport + " Fixture (" + evt.ToString() + ")", "GMM Creates a fixture event and fetch the event id");
+            var gmmMenu = new GMMMenu(driver);
+            var gmmCreateEvent = new GMMCreateEvent(driver);
+            GetEventComponent(sp, evt);
+
+            #region (1) Go to EventCreate Page
+            ElementVerify.Exist(driver, gmmMenu.Sportsbook).ClickOnIt("Sportsbook");
+            ElementVerify.Exist(driver, gmmMenu.Event).MouseOver(driver, "Event");
+            ElementVerify.Exist(driver, gmmMenu.FixtureEvent).ClickOnIt("Fixture Event");
+            ElementVerify.Exist(driver, gmmCreateEvent.Create).ClickOnIt("Create Button");
+            #endregion
+            #region (2) Select sport / competition / participant ..
+            // Event DateTime
+            ElementVerify.Exist(driver, gmmCreateEvent.EventDatePicker).EnterText("CreateEventPage Date", eventTime.ToString("dd/MM/yyyy"));
+            ElementVerify.Exist(driver, gmmCreateEvent.EventHourDropdown).SelectByText("CreateEventPage Hour", eventTime.ToString("HH"));
+            ElementVerify.Exist(driver, gmmCreateEvent.EventMinuteDropdown).SelectByText("CreateEventPage Minute", eventTime.ToString("mm"));
+
+            // Sport
+            ElementVerify.Exist(driver, gmmCreateEvent.SportDropdown).SelectByText("CreateEventPage Sport", sport);
+
+            // Competition in dynamic dropdownlist
+            ElementVerify.Exist(driver, By.CssSelector("#mainContent_CompetitionDropDownList > option[title='" + competition + "']"));
+            ElementVerify.Exist(driver, gmmCreateEvent.CompetitionDropdown).SelectByText("CreateEventPage Competition", competition);
+
+            // Home Away 
+            ElementVerify.Exist(driver, By.CssSelector("#mainContent_HomeRunnerDropDownList > option[title='" + home + "']"));
+            ElementVerify.Exist(driver, gmmCreateEvent.HomeDropdown).SelectByText("CreateEventPage Home", home);
+            ElementVerify.Exist(driver, gmmCreateEvent.AwayDropdown).SelectByText("CreateEventPage Away", away);
+
+            // In-Play
+            ElementVerify.Exist(driver, gmmCreateEvent.InPlayCheckbox).ClickOnIt("IsInPlay");
+
+
+            // Ground Type = Neutral(2)
+            ElementVerify.Exist(driver, gmmCreateEvent.GroundTypeDropdown).SelectByValue("CreateEventPage GroundType", "2");
+
+            // GameType
+            try
+            {
+                ElementVerify.Exist(driver, gmmCreateEvent.GroundTypeDropdown).SelectByText("CreateEventPage GameType", gametype);
+            }
+            catch (NoSuchElementException)
+            {
+                WriteConsole.Yellow("This sport has no GameType");
+            }
+            #endregion
+            #region (3) Save and Get Eevnt ID
+            ElementVerify.Exist(driver, gmmCreateEvent.SaveButton).ClickOnIt("Button_Save");
+            if (ElementVerify.Exist(driver, gmmCreateEvent.CreateFailMsg, 60).GetAttribute("class") != "hide")
+            {
+                WriteConsole.DarkRed(ElementVerify.Exist(driver, gmmCreateEvent.CreateFailMsg).Text);
+                Test.Log(Status.Fail, "Get Event id", ElementVerify.Exist(driver, gmmCreateEvent.CreateFailMsg).Text);
+                Test.PrintScreen(driver);
+                throw new Exception("GMM CreateEvent Failed");
+            }
+            Test.PrintScreen(driver);
+
+
+            if (ElementVerify.Exist(driver, gmmCreateEvent.CreateSuccessMsg, 60) != null)
+            {
+                WriteConsole.Green(String.Format("Create Event Successfully! Event id : {0} ({1})", eventid, sport));
+                Test.Log(Status.Pass, "Get event id", String.Format("Create Event Successfully! Event id : {0} ({1})", ElementVerify.Exist(driver, gmmCreateEvent.ParentEventId, 60).GetAttribute("Value").Trim(), sport));
+                Test.PrintScreen(driver);
+                return ElementVerify.Exist(driver, gmmCreateEvent.ParentEventId, 60).GetAttribute("Value").Trim();     //eventid            
+            }
+            else
+            {
+                Test.Log(Status.Fail, "Get event id", "Cannot find eventid");
+                Test.PrintScreen(driver);
+                throw new Exception("GMM CreateEvent Failed");
+            }
+
+
+            Thread.Sleep(2000);
+            #endregion
+        }
+        public static void GoToMMPage(string eventid)
+        {
+            Test.CaseName("GMM MMPage search EventID = " + eventid + "", "Go to MM Page and search the event we created");
+            var gmmMenu = new GMMMenu(driver);
+            var gmmMMPage = new GMMMMPage(driver);
+
+            ElementVerify.Visable(driver, gmmMenu.MarketManagement).ClickOnIt("Market Management");
+            ElementVerify.Visable(driver, gmmMenu.MarketManagementNormal).ClickOnIt("Market Management (Normal)");
+            Thread.Sleep(1000);
+
+            // Sport
+            ElementVerify.Exist(driver, gmmMMPage.SportCriteria).ClickOnIt("Sport");
+            ElementVerify.Exist(driver, gmmMMPage.SportPopup);
+            ElementVerify.Exist(driver, gmmMMPage.SportList);
+            ElementVerify.Exist(driver, By.XPath("//label[contains(text() ,'" + sport + "')]")).ClickOnIt(sport);
+            ElementVerify.Exist(driver, gmmMMPage.SportSubmit).ClickOnIt("SubmitSport");
+
+            // Market Page Dropdown & date
+            ElementVerify.Visable(driver, gmmMMPage.AllMarketInPlay);
+            if (eventTime <= DateTime.Now.AddHours(-12))
+                ElementVerify.Visable(driver, gmmMMPage.MarketPageDropdown).SelectByText("All Market (In Play)", "All Market (In Play)");
+            else if (eventTime > DateTime.Now.AddHours(-12))
+            {
+                ElementVerify.Visable(driver, gmmMMPage.MarketPageDropdown).SelectByText("All Market", "All Market");
+                ElementVerify.Visable(driver, gmmMMPage.DatePeriodHeader).ClickOnIt("Open DateRange Popup");
+                //ElementVerify.Visable(driver, gmmMMPage.DatePeriodPopup);
+                ElementVerify.Visable(driver, gmmMMPage.DatePeriodContainer);
+                ElementVerify.Visable(driver, gmmMMPage.DateToTextBox).EnterText("DateTextbox(To)", eventTime.ToString("dd/MM/yyyy"));
+                ElementVerify.Visable(driver, gmmMMPage.DateToTextBox).SendKeys(Keys.Enter);
+                ElementVerify.Visable(driver, gmmMMPage.DatePeriodHeader).ClickOnIt("Close DateRange Popup");
+                ElementVerify.Visable(driver, gmmMMPage.SearchButton).ClickOnIt("SearchEvent");
+
+            }
+
+            // Competition
+            ElementVerify.Clickable(driver, gmmMMPage.SearchButton); //wait.Until(ExpectedConditions.ElementToBeClickable(gmmMMPage.SearchButton));
+            ElementVerify.Exist(driver, gmmMMPage.CompetitionCriteria).ClickOnIt("Competition Filter");
+            ElementVerify.Exist(driver, gmmMMPage.ComptitionSelectAll).ClickOnIt("Deselect All");
+            ElementVerify.Exist(driver, By.XPath("//label[contains(text() , '" + competition + "')]")).ClickOnIt(competition);
+            ElementVerify.Exist(driver, gmmMMPage.CompetitionSubmit).ClickOnIt("Confirm Competition");
+
+            // Event  
+            ElementVerify.Clickable(driver, gmmMMPage.SearchButton); //wait.Until(ExpectedConditions.ElementToBeClickable(gmmMMPage.SearchButton));
+            ElementVerify.Exist(driver, gmmMMPage.EventCriteria).ClickOnIt("Event Filter");
+            ElementVerify.Exist(driver, gmmMMPage.EventTextbox).EnterText("EventID Textbox", eventid);
+            ElementVerify.Exist(driver, gmmMMPage.EventSelectAll).ClickOnIt("Deselect All");
+            ElementVerify.Exist(driver, By.Id("" + eventid + "")).ClickOnIt("Filter one event we created");
+            ElementVerify.Exist(driver, gmmMMPage.EventSubmit).ClickOnIt("Confirm Event");
+
+            // Filter Status (Skip for now)
+
+            // Filter Date Range (Skip for now)
+            // (1) Inplay events are no need to define range
+            // (2) Pre Start events 
+
+            // Search the event based on filters
+            wait.Until(ExpectedConditions.ElementToBeClickable(gmmMMPage.SearchButton));
+            ElementVerify.Exist(driver, gmmMMPage.SearchButton).ClickOnIt("SearchEvent");
+            WriteConsole.Green(String.Format("Search Event id : {0} ({1})", eventid, sport));
+
+            ElementVerify.Visable(driver, By.Id("evt" + eventid));
+            Test.PrintScreen(driver);
+        }
+        public static void UpdateOdds(string eventid)
+        {
+            Test.CaseName("GMM Update Odds", "GMM updates odds of the event we created");
+            var gmmMMPage = new GMMMMPage(driver);
+            Random random = new Random();
+
+            #region (1) Fetch every cells of the event
+            ElementVerify.Exist(driver, By.Id("evt" + eventid));
+            IWebElement eventTable = ElementVerify.Exist(driver, By.XPath("//*[@id='evt" + eventid + "']"));
+            ICollection<IWebElement> cells = eventTable.FindElements(By.TagName("td"));
+            #endregion
+
+            #region (2) Key odds
+            int cellcount = 1;
+            foreach (var cell in cells)
+            {
+
+                try
+                {
+                    cell.FindElement(By.XPath("div"));
+                }
+                catch (NoSuchElementException e)
+                {
+                    WriteConsole.Cyan(e.Message);
+                    break;
+                }
+
+
+
+                if (cell.FindElement(By.XPath("div")).GetAttribute("class") == "odds")
+                {
+                    // Without Spread
+                    if (cell.GetAttribute("wsml") == "false")
+                    {
+
+                        cell.FindElement(By.XPath("div/a")).ClickOnIt("oddsbox");
+                        ElementVerify.Exist(driver, gmmMMPage.NoHandicapOdds);
+                        ICollection<IWebElement> oddsEuros = driver.FindElements(gmmMMPage.NoHandicapOdds);
+                        foreach (var oddsEuro in oddsEuros)
+                        {
+                            oddsEuro.EnterText("Euro Odds", random.Next(2, 15).ToString());
+                            WriteConsole.Cyan(String.Format("Cell Number {0} : you key in odds {1}", cellcount, random));
+                            Test.Log(Status.Pass, "Update odds", String.Format("Cell Number {0} : you key in odds {1}", cellcount, random));
+                        }
+
+                        ElementVerify.Exist(driver, gmmMMPage.OddsSaveButton).ClickOnIt("Save Button");
+                        // if Odds Change is greater than alert percentage
+                        //if (ElementVerify.Alert(driver, 1) == true)
+                        //{
+                        //    alert = driver.SwitchTo().Alert();
+                        //    alert.Accept();
+                        //}
+
+                    }
+                    // With Spread
+                    else
+                    {
+                        double handicap = random.Next(0, 15) + 0.5;
+
+                        cell.FindElement(By.XPath("div/a")).ClickOnIt("oddsbox");
+                        if (ElementVerify.Exist(driver, gmmMMPage.HandicapOdds, 1) != null)
+                        {
+
+                            switch (sport)
+                            {
+                                case "Football":
+                                    ElementVerify.PresenceAll(driver, gmmMMPage.HandicapDropdown).SelectByText("handicap Line", handicap.ToString());
+                                    break;
+                                default:
+                                    ElementVerify.Exist(driver, gmmMMPage.HandicapTextbox).EnterText("handicap Line", handicap.ToString());
+                                    break;
+                            }
+                            ElementVerify.Exist(driver, gmmMMPage.HandicapOdds).EnterText("Home Odds", random.NextDouble().ToString("0.##"));
+                            ElementVerify.Exist(driver, gmmMMPage.HandicapOdds).SendKeys(Keys.Enter);
+                            // if Odds Change is greater than alert percentage
+                            //if (ElementVerify.Alert(driver, 1) == true)
+                            //{
+                            //    alert = driver.SwitchTo().Alert();
+                            //    alert.Accept();
+                            //}
+                        }
+                        else if (ElementVerify.Exist(driver, gmmMMPage.NoHandicapOdds, 1) != null)  //OE 
+                        {
+                            ElementVerify.Exist(driver, gmmMMPage.NoHandicapOdds).EnterText("Home Odds", random.NextDouble().ToString("0.##"));
+                            ElementVerify.Exist(driver, gmmMMPage.NoHandicapOdds).SendKeys(Keys.Enter);
+                            // if Odds Change is greater than alert percentage
+                            //if (ElementVerify.Alert(driver, 1) == true)
+                            //{
+                            //    alert = driver.SwitchTo().Alert();
+                            //    alert.Accept();
+                            //}
+                        }
+
+                        WriteConsole.Cyan(String.Format("Cell Number {0} : you key in odds {1}", cellcount, random));
+                        Test.Log(Status.Pass, "Update odds", String.Format("Cell Number {0} : you key in odds {1}", cellcount, random));
+                    }
+                }
+                else
+                {
+                    WriteConsole.Cyan(String.Format("Cell Number {0} : This is not the odds link", cellcount));
+                }
+                cellcount++;
+
+            }
+            #endregion
+            Thread.Sleep(1000);
+            Test.PrintScreen(driver);
+        }
+        public static void OpenMarket(string eventid)
+        {
+            Test.CaseName("GMM Open Markets", "Open market lines of the event we created");
+            var gmmMMPage = new GMMMMPage(driver);
+            //Open Main markets
+            ElementVerify.Exist(driver, By.Id("button2" + eventid)).ClickOnIt("Pause Button");
+            ElementVerify.Exist(driver, gmmMMPage.OpenMarketline).ClickOnIt("Open Markettline");
+            Thread.Sleep(3000);
+            Test.PrintScreen(driver);
+        }
+        public static void KeepEvent(string eventid)
+        {
+            Test.CaseName("GMM Keep Markets", "Send market lines for resulting");
+            // wait for action button
+            //ElementVerify.Wait(driver, By.Id("button2" + eventid)));
+            IWebElement pauseButton = ElementVerify.Exist(driver, By.Id("button2" + eventid));
+            IAlert alert;
+
+            if (ElementVerify.Visable(driver, By.Id("amlc_" + eventid), 1) != null)//(driver.FindElement(By.Id("amlc_" + eventid)).Displayed) //football
+            {
+                WriteConsole.Cyan("There is no Football match view icon for football");
+                Test.Log(Status.Info, "Info", "There is a Football  match view icon for football");
+            }
+            else
+            {
+                WriteConsole.Cyan("There is no mathc view icon");
+                Test.Log(Status.Info, "Info", "There is no mathc view icon");
+            }
+
+
+            // Pause
+            pauseButton.ClickOnIt("Status would be Pasue");
+            ElementVerify.PresenceAll(driver, By.XPath("//*[@id='excla" + eventid + "'][contains(@style, 'display: inline-block')]"));
+            Console.WriteLine("Marketline Status : Open to Pause");
+            Thread.Sleep(2000);
+
+            // click on pause again to perform close
+            pauseButton.ClickOnIt("Pause Button");
+            ElementVerify.PresenceAll(driver, By.XPath("//*[@id='button2" + eventid + "'][contains(@class, 'btn_refresh btn_refresh_black')]"));
+            ElementVerify.Visable(driver, By.Id("closeCurrentPageMlButton")).ClickOnIt("Close Markettline");
+
+
+
+            // Sent for resulting
+            ElementVerify.Visable(driver, By.Id("pbet" + eventid)).ClickOnIt("Statistic Icon");
+            ElementVerify.Clickable(driver, By.Id("mkt_stats2")).ClickOnIt("Resulting Icon");
+            ElementVerify.Clickable(driver, By.Id("SendAllForResulting")).ClickOnIt("Send Resulting (Event)");
+
+            // 1st Alert to confrim doing resulting 
+            //wait.Until(ExpectedConditions.AlertIsPresent());
+            ElementVerify.Alert(driver, 20);
+            alert = driver.SwitchTo().Alert();
+            alert.Accept();
+
+            // 2nd Alert to inform resulting is finished
+            //wait.Until(ExpectedConditions.AlertIsPresent());
+            ElementVerify.Alert(driver, 20);
+            alert.Accept();
+
+
+
+            Thread.Sleep(2000);
+            Test.PrintScreen(driver);
+        }
+        public static void ResultAndSettleEvent(String eventid, EventTime evt)
+        {
+            var settlementPage = new SettlementPage(driver, eventid);
+            Test.CaseName("GMM Result Process", "Enter results and do settlement by event");
+            String dd = String.Empty;
+            IAlert alert;
+
+            // Go to Result Process & Settlemenet Page
+            ElementVerify.Visable(driver, By.LinkText("Result Process & Settlement")).ClickOnIt("Result Process & Settlement");
+            ElementVerify.Visable(driver, By.LinkText("Result Process")).MouseOver(driver, "Result Process");
+            ElementVerify.Visable(driver, settlementPage.ResultProcessLink).MouseOver(driver, "Sub Result Process");
+            ElementVerify.Visable(driver, settlementPage.ResultProcessLink).ClickOnIt("Result Process Page");
+
+
+
+            ElementVerify.Visable(driver, settlementPage.EventId).EnterText("Event ID", eventid);    
+            // Event Date From
+            ElementVerify.Visable(driver, settlementPage.StartDateIcon).ClickOnIt("Event Date From");
+            ElementVerify.Exist(driver, settlementPage.CalendarPopup);
+
+            ICollection<IWebElement> columnsFrom = settlementPage.CalendarPicker.FindElements(By.TagName("td"));
+            foreach (IWebElement cell in columnsFrom)
+            {
+                if (cell.Text.Equals(Convert.ToInt64(DateTime.Now.AddDays(-2).ToString("dd")).ToString()))
+                {
+                    cell.ClickOnIt("date");
+                    break;
+                }
+            }
+
+
+            // EventDate To
+            ElementVerify.Visable(driver, settlementPage.EndDateIcon).ClickOnIt("Event Date To");
+            ElementVerify.Visable(driver, By.ClassName("ui-datepicker-calendar"));   
+            switch (evt)
+            {
+                case EventTime.Tomorrow:
+                    dd = Convert.ToInt64(DateTime.Now.AddDays(1).ToString("dd")).ToString();
+                    break;
+                default:
+                    dd = Convert.ToInt64(DateTime.Now.ToString("dd")).ToString();
+                    break;
+            }
+
+            ICollection<IWebElement> columnsTo = settlementPage.CalendarPicker.FindElements(By.TagName("td"));
+            foreach (IWebElement cell in columnsTo)
+            {
+                if (cell.Text.Equals(dd))
+                {
+                    cell.ClickOnIt("date");
+                    break;
+                }
+            }
+
+            ElementVerify.Clickable(driver, settlementPage.SearchButton).ClickOnIt("Search");
+
+            // Find number of market actions item
+            ElementVerify.Exist(driver, settlementPage.LoadingBar);    // Wait until loading complete
+            ElementVerify.Exist(driver, settlementPage.RefreshButton); // Wait for the event
+            
+            #region (6) Enter Result
+            ICollection<IWebElement> marketItems = driver.FindElements(settlementPage.MarketLine);
+            Console.WriteLine(String.Format("Number of market line : {0}", marketItems.Count));
+            Test.Log(Status.Info, "Count", String.Format("Number of market line : {0}", marketItems.Count));
+
+            List<string> marketlist = new List<string>();
+            foreach (IWebElement marketItem in marketItems)
+            {
+                //Get marketline result action id
+                marketlist.Add(marketItem.GetAttribute("id"));
+                Console.WriteLine(marketItem.GetAttribute("id"));
+            }
+
+
+            for (int i = 0; i < marketlist.Count; i++)
+            {
+                if (ElementVerify.Exist(driver, By.XPath("//*[@id='" + marketlist[i] + "']/span[3]")).Text == "Not Resulted")
+                {
+                    do
+                    {
+                        //Click on Action Button
+                        ElementVerify.Exist(driver, By.XPath("//*[@id='" + marketlist[i] + "']/span[2]")).ClickOnIt("Marketline Action");
+                        Thread.Sleep(2000);
+                        ElementVerify.Exist(driver, settlementPage.ActionDropdown);
+                        ElementVerify.Exist(driver, By.LinkText("Enter Result")).ClickOnIt("Enter Result");
+                        ElementVerify.Exist(driver, settlementPage.ResultPopup);
+
+                        //Key Result for scoreline
+                        if (driver.FindElement(settlementPage.ScorelineResult).Displayed)
+                        {
+                            ElementVerify.Exist(driver, settlementPage.ScoreHome).EnterText("Score Home", "2");
+                            ElementVerify.Exist(driver, settlementPage.ScoreAway).EnterText("Score Away", "0");
+                            Thread.Sleep(2000);
+                            ElementVerify.Exist(driver, settlementPage.SaveButton).MouseOverThenClick(driver, "Save");
+
+                            // Alert message
+                            ElementVerify.Alert(driver, 20);
+                            alert = driver.SwitchTo().Alert();
+                            alert.Accept();
+                        }
+                        else if (driver.FindElement(By.XPath("//*[@id='" + marketlist[i] + "']/span[2]/ul[2]/li/table[2]")).Displayed) //Key Result for SPWOS
+                        {
+                            ElementVerify.Exist(driver, By.XPath("//*[@id='" + marketlist[i] + "']/span[2]/ul[2]/li/table[2]/tbody/tr/td[2]/select"));
+                            Thread.Sleep(2000);
+                            ElementVerify.Exist(driver, By.XPath("//*[@id='" + marketlist[i] + "']/span[2]/ul[2]/li/table[2]/tbody/tr/td[2]/select")).ClickOnIt("Win Selection");
+                            ElementVerify.Exist(driver, By.XPath("//*[@id='" + marketlist[i] + "']/span[2]/ul[2]/li/table[2]/tbody/tr/td[2]/select")).SelectByText("Result Option", "WIN");
+                            Thread.Sleep(2000);
+                            ElementVerify.Exist(driver, settlementPage.SaveButtonProp).MouseOverThenClick(driver, "Save");
+
+                            // Alert message
+                            ElementVerify.Alert(driver, 20);
+                            alert = driver.SwitchTo().Alert();
+                            alert.Accept();
+                            Thread.Sleep(2000);
+                        }
+                        //ElementVerify.Visable(driver, By.XPath("//*[@id='" + marketlist[i] + "']/span[3]")).Text.Equals("Approved");
+                    } while (ElementVerify.Visable(driver, By.XPath("//*[@id='" + marketlist[i] + "']/span[3]")).Text != "Approved");
+                }
+                else
+                {
+                    Console.WriteLine("This marketline has resulted already");
+                }
+            }
+            #endregion
+
+            #region (7) Void Result
+            #endregion
+
+            #region (8) Settle All BU
+            ElementVerify.Exist(driver, settlementPage.CheckAll);
+            ElementVerify.Exist(driver, settlementPage.CheckAll).ClickOnIt("Checkbox of All BU");
+            ElementVerify.Exist(driver, settlementPage.SettleButton).ClickOnIt("Do Settlement Button");
+            // Alert message (Confirm do Settlement?)
+            ElementVerify.Alert(driver, 20);
+            alert = driver.SwitchTo().Alert();
+            alert.Accept();  
+            // Alert message (Settlement successfull!)
+            ElementVerify.Alert(driver, 20);
+            alert = driver.SwitchTo().Alert();
+            alert.Accept();  
+            #endregion
+
+            #region (9) Unsettle All BU
+            /*
+            ElementVerify.IsElementExists(driver, settlementPage.CheckAll);
+            driver.FindElement(settlementPage.CheckAll).ClickOnIt("Check All BU");
+            driver.FindElement(settlementPage.UnSettleButton).ClickOnIt("Do UnSettlement");
+            // Alert message (Confirm do UnSettlement?)
+            wait.Until(ExpectedConditions.AlertIsPresent());
+            alert = driver.SwitchTo().Alert();
+            alert.Accept();
+            // Alert message (UnSettlement successfull!)
+            wait.Until(ExpectedConditions.AlertIsPresent());
+            alert = driver.SwitchTo().Alert();
+            alert.Accept();
+            */
+            #endregion
+
+            Test.PrintScreen(driver);
+        }
+        public static void CheckReport(string BetNo)
+        {
+            Test.CaseName("GMM Wager Enquiry", "Verify wager numbers in Wager Enquiry");
+            DateTime eventDayFrom = DateTime.Now.AddDays(-2);
+            var gmmMenu = new GMMMenu(driver);
+            var wagerEnquiry = new WagerEnquiry(driver);
+
+            #region (1) Access Wager Enquiry
+            ElementVerify.Exist(driver, gmmMenu.Report).ClickOnIt("Report");
+            ElementVerify.Exist(driver, gmmMenu.WagerEnquiry).ClickOnIt("Wager Enquiry");
+            #endregion
+
+            #region (2) Switch to iframe and Select Wager No.
+            //Switch to iframe
+            driver.SwitchTo().Frame(driver.FindElement(By.TagName("iframe")));
+            //Select Wager No.
+            ElementVerify.Exist(driver, wagerEnquiry.UserWagerOption).ClickOnIt("User Code or Wager No.");
+            ElementVerify.Exist(driver, wagerEnquiry.UserWagerOption).SelectByText("select wager no", "Wager No.");
+            #endregion
+
+            #region (3) Pick Event Date From
+            if (ElementVerify.Exist(driver, wagerEnquiry.StartDate) != null)
+            {
+                //Click on calendar icon
+                ElementVerify.Exist(driver, wagerEnquiry.StartDate).ClickOnIt("Event Date From");
+                ElementVerify.Exist(driver, wagerEnquiry.CalendarPicker);
+                ICollection<IWebElement> columns = driver.FindElement(wagerEnquiry.CalendarPicker).FindElements(By.TagName("td"));
+
+                //Click on the number if cell = today's date-2
+                foreach (IWebElement cell in columns)
+                {
+                    if (cell.Text.Equals(eventDayFrom.ToString("dd")))
+                    {
+                        cell.ClickOnIt("date");
+                        break;
+                    }
+                }
+            }
+            #endregion
+
+            #region (4) Fetch All Bet Number from TouTou
+
+            char[] delimiterChars = { ',' };
+            BetNo = BetNo.Remove(BetNo.Length - 1);        // Reomove the last comma (,)
+            string[] wagers = BetNo.Split(delimiterChars);
+            foreach (string wager in wagers)
+            {
+                // Key in wager number in textbox
+                Thread.Sleep(2000);
+                ElementVerify.Exist(driver, wagerEnquiry.UserWagerValue).EnterText("Wager No.", wager);
+                ElementVerify.Exist(driver, wagerEnquiry.SearchButton).ClickOnIt("Search");
+
+                // Wait for data displayed, then fetch wager number
+                if (ElementVerify.Exist(driver, wagerEnquiry.WagerToVerify) == null)
+                {
+                    WriteConsole.DarkRed("Unable to find the wager");
+                    continue;
+                }
+
+                if (wager == driver.FindElement(wagerEnquiry.WagerToVerify).Text)
+                    WriteConsole.Green("Wager Verified");
+                else
+                    WriteConsole.DarkRed("Unable to find the wager");
+            }
+
+            #endregion
+            Test.PrintScreen(driver);
+        }
+        public static void GetEventComponent(Sport sp, EventTime evt)
+        {
+            #region Sport, competition, home, away, gametype
+            switch (sp)
+            {
+                case Sport.Football:
+                    sport = "Football";
+                    competition = "(Love FB)";
+                    home = "Jeff Duan";
+                    away = "Neil Tsai";
+                    //gametype = FB has no gametype 
+                    break;
+                case Sport.Baseball:
+                    sport = "Baseball";
+                    competition = "(Love B.BALL)";
+                    home = "Sean Li";
+                    away = "Jane Cheng";
+                    gametype = "Inning";
+                    break;
+                case Sport.Snooker:
+                    sport = "Snooker";
+                    competition = "(Love SNK)";
+                    home = "Marie Yeh";
+                    away = "Linda Lin";
+                    gametype = "Best of 5";        // Best of 5,7,9,11,13,...,33,35.
+                    break;
+                case Sport.IceHockey:
+                    sport = "Ice Hockey";
+                    competition = "(Love I.HOC)";
+                    home = "Marie Yeh";
+                    away = "Jane Cheng";
+                    //gametype = no gametype 
+                    break;
+                default:
+                    break;
+            }
+            #endregion
+
+            #region Event Time
+            switch (evt)
+            {
+                case EventTime.RunningBall:
+                    eventTime = DateTime.Now.AddHours(-14);         //2 hours before NOW  ---- Local(GMT+8),Server(GMT-4)
+                    break;
+                case EventTime.StartingSoon:
+                    eventTime = DateTime.Now.AddHours(-11);
+                    break;
+                case EventTime.Today:
+                    if (DateTime.Now.AddHours(-12).Date == DateTime.Now.Date)        // when GMT+8 = 12:00 ~ 23:59 , same date as in GMT-4 
+                        eventTime = DateTime.Now;
+                    else if (DateTime.Now.AddHours(-12).Date != DateTime.Now.Date)   // when GMT+8 = 00:00 ~ 11:59 , the day after GMT-4
+                        eventTime = DateTime.Now.Date.AddMinutes(-1);
+                    break;
+                case EventTime.Tomorrow:
+                    if (DateTime.Now.AddHours(-12).Date == DateTime.Now.Date)        // when GMT+8 = 12:00 ~ 23:59 , same date as in GMT-4 
+                        eventTime = DateTime.Now.AddHours(12);
+                    else if (DateTime.Now.AddHours(-12).Date != DateTime.Now.Date)   // when GMT+8 = 00:00 ~ 11:59 , the day after GMT-4
+                        eventTime = DateTime.Now;
+                    break;
+                default:
+                    break;
+            }
+            #endregion
+
+        }
+    }
+
+    public enum TheEnvironment
+    {
+        QAT,
+        UAT
+    }
+    public enum Sport
+    {
+        Football,
+        Baseball,
+        Snooker,
+        IceHockey
+    }
+    public enum EventTime
+    {
+        RunningBall,
+        StartingSoon,
+        Today,
+        Tomorrow
+    }
+
+}
